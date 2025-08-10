@@ -1,4 +1,3 @@
-# install.sh - Installation script
 #!/bin/bash
 
 set -e
