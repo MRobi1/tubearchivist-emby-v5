@@ -1,4 +1,3 @@
-# monitoring.py
 #!/usr/bin/env python3
 """
 Monitoring and metrics for TubeArchivist-Emby Integration
