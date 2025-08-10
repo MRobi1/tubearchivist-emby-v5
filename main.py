@@ -13,20 +13,40 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-import schedule
 
-# urllib3 compatibility imports
-import urllib3
-from urllib3.util.retry import Retry
-from requests.adapters import HTTPAdapter
-import requests
-
-# Load environment variables
+# Load environment variables first
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+# Core imports
+import requests
+
+# urllib3 compatibility imports
+try:
+    import urllib3
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
+except ImportError as e:
+    logging.error(f"Failed to import required packages: {e}")
+    sys.exit(1)
+
+# Optional imports
+try:
+    import schedule
+    HAS_SCHEDULE = True
+except ImportError:
+    HAS_SCHEDULE = False
+    logging.warning("Schedule not available - server mode disabled")
+
+try:
+    from dateutil.parser import parse as date_parse
+    HAS_DATEUTIL = True
+except ImportError:
+    HAS_DATEUTIL = False
+    logging.warning("python-dateutil not available - date parsing limited")
 
 # urllib3 Compatibility Fix
 class CompatibleHTTPAdapter(HTTPAdapter):
@@ -502,26 +522,32 @@ class TubeArchivistEmbyIntegration:
             return None
         
         try:
-            # Handle various date formats
-            from dateutil.parser import parse
-            date_obj = parse(date_string)
-            return date_obj.year
-        except Exception:
-            return None
+            if HAS_DATEUTIL:
+                # Use dateutil if available
+                date_obj = date_parse(date_string)
+                return date_obj.year
+            else:
+                # Fallback to basic parsing
+                # Try to extract year from common formats like "2023-01-15T10:30:00Z"
+                import re
+                year_match = re.search(r'(\d{4})', date_string)
+                if year_match:
+                    return int(year_match.group(1))
+        except Exception as e:
+            logging.debug(f"Failed to parse date '{date_string}': {e}")
+        
+        return None
 
-def setup_logging(level: str = 'INFO'):
-    """Setup logging configuration"""
-    numeric_level = getattr(logging, level.upper(), logging.INFO)
-    
-    logging.basicConfig(
-        level=numeric_level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-        ]
-    )
+
 
 def main():
+    # Setup basic logging first
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    
     parser = argparse.ArgumentParser(description='TubeArchivist Emby Integration v5.0')
     parser.add_argument('--server', action='store_true', help='Run as server for notifications')
     parser.add_argument('--sync', action='store_true', help='Perform one-time sync')
@@ -531,7 +557,11 @@ def main():
     try:
         # Load configuration
         config = Config()
-        setup_logging(config.get('log_level', 'INFO'))
+        
+        # Update logging level from config
+        log_level = config.get('log_level', 'INFO').upper()
+        logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
+        
         logging.info("Configuration loaded successfully")
         
         # Create integration instance
@@ -544,14 +574,26 @@ def main():
         
         elif args.server:
             # Run as server
+            if not HAS_SCHEDULE:
+                logging.error("Schedule package not available - cannot run in server mode")
+                sys.exit(1)
+                
             logging.info("Starting server mode...")
             # Here you would implement your notification server
             # For now, we'll run scheduled sync
             schedule.every(config.get('sync_interval_hours', 24)).hours.do(integration.sync_metadata)
             
+            logging.info("Server started - running periodic sync...")
             while True:
-                schedule.run_pending()
-                time.sleep(60)
+                try:
+                    schedule.run_pending()
+                    time.sleep(60)
+                except KeyboardInterrupt:
+                    logging.info("Received shutdown signal")
+                    break
+                except Exception as e:
+                    logging.error(f"Server error: {e}")
+                    time.sleep(60)
         
         else:
             # Default: one-time sync
