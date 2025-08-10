@@ -1,5 +1,4 @@
 #!/bin/bash
-# manage.sh - Management script for TubeArchivist-Emby Integration
 
 set -e
 
