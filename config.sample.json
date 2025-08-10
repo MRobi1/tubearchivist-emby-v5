@@ -1,0 +1,13 @@
+{
+  "ta_url": "http://tubearchivist.local:8000",
+  "ta_token": "your_tubearchivist_api_token",
+  "ta_video_path": "/youtube",
+  "emby_url": "http://emby.local:8096", 
+  "emby_token": "your_emby_api_token",
+  "emby_folder": "YouTube",
+  "listen_port": 8001,
+  "sync_interval": 3600,
+  "max_retries": 3,
+  "timeout": 30,
+  "log_level": "INFO"
+}
