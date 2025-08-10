@@ -25,7 +25,7 @@ A modern integration to sync metadata between TubeArchivist v5.0+ and Emby, orga
 
 1. **Clone or download the integration files**
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/MRobi1/tubearchivist-emby-v5
    cd tubearchivist-emby-v5
    ```
 
