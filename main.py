@@ -627,133 +627,6 @@ class TubeArchivistEmbyIntegration:
             # YouTube IDs are 11 characters: letters, numbers, hyphens, underscores
             import re
             if re.match(r'^[a-zA-Z0-9_-]{11}$', item_name):
-    
-    def _update_emby_item_metadata(self, emby_item: Dict[str, Any], ta_video: Dict[str, Any]) -> bool:
-        """Update a single Emby item with TubeArchivist metadata"""
-        item_id = emby_item.get('Id')
-        if not item_id:
-            return False
-        
-        # Prepare metadata update
-        metadata = {
-            'Name': ta_video.get('title', ''),
-            'Overview': ta_video.get('description', ''),
-            'Studios': [{'Name': ta_video.get('channel', {}).get('channel_name', '')}] if ta_video.get('channel') else [],
-            'Tags': ta_video.get('tags', []),
-            'PremiereDate': ta_video.get('published'),
-            'ProductionYear': self._extract_year(ta_video.get('published')),
-            'ProviderIds': {
-                'YouTube': ta_video.get('youtube_id', '')
-            }
-        }
-        
-        # Remove empty fields
-        metadata = {k: v for k, v in metadata.items() if v}
-        
-        success = self.emby_client.update_item_metadata(item_id, metadata)
-        if success:
-            logging.debug(f"Updated metadata for: {ta_video.get('title', 'Unknown')}")
-        
-        return success
-    
-    def _extract_year(self, date_string: Optional[str]) -> Optional[int]:
-        """Extract year from date string"""
-        if not date_string:
-            return None
-        
-        try:
-            if HAS_DATEUTIL:
-                # Use dateutil if available
-                date_obj = date_parse(date_string)
-                return date_obj.year
-            else:
-                # Fallback to basic parsing
-                # Try to extract year from common formats like "2023-01-15T10:30:00Z"
-                import re
-                year_match = re.search(r'(\d{4})', date_string)
-                if year_match:
-                    return int(year_match.group(1))
-        except Exception as e:
-            logging.debug(f"Failed to parse date '{date_string}': {e}")
-        
-        return None
-
-
-
-def main():
-    # Setup basic logging first
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-    
-    parser = argparse.ArgumentParser(description='TubeArchivist Emby Integration v5.0')
-    parser.add_argument('--server', action='store_true', help='Run as server for notifications')
-    parser.add_argument('--sync', action='store_true', help='Perform one-time sync')
-    parser.add_argument('--test', action='store_true', help='Test connections only')
-    args = parser.parse_args()
-    
-    try:
-        # Load configuration
-        config = Config()
-        
-        # Update logging level from config
-        log_level = config.get('log_level', 'INFO').upper()
-        logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
-        
-        logging.info("Configuration loaded successfully")
-        
-        # Create integration instance
-        integration = TubeArchivistEmbyIntegration(config)
-        
-        if args.test:
-            # Test connections only
-            success = integration.test_connections()
-            sys.exit(0 if success else 1)
-        
-        elif args.server:
-            # Run as server
-            if not HAS_SCHEDULE:
-                logging.error("Schedule package not available - cannot run in server mode")
-                sys.exit(1)
-                
-            logging.info("Starting server mode...")
-            
-            # Start webhook server
-            webhook_port = int(config.get('listen_port', 8001))
-            webhook_server = WebhookServer(integration, webhook_port)
-            webhook_server.start()
-            
-            # Schedule periodic sync
-            schedule.every(config.get('sync_interval_hours', 24)).hours.do(integration.sync_metadata)
-            
-            logging.info(f"Server started - webhook listening on port {webhook_port}")
-            logging.info(f"Scheduled sync every {config.get('sync_interval_hours', 24)} hours")
-            
-            try:
-                while True:
-                    schedule.run_pending()
-                    time.sleep(60)
-            except KeyboardInterrupt:
-                logging.info("Received shutdown signal")
-                webhook_server.stop()
-            except Exception as e:
-                logging.error(f"Server error: {e}")
-                webhook_server.stop()
-                raise
-        
-        else:
-            # Default: one-time sync
-            success = integration.sync_metadata()
-            sys.exit(0 if success else 1)
-    
-    except Exception as e:
-        logging.error(f"Application error: {e}")
-        sys.exit(1)
-
-if __name__ == '__main__':
-    main(), item_name):
                 youtube_id = item_name
                 logging.debug(f"Item name is YouTube ID: {youtube_id}")
                 return youtube_id
@@ -828,7 +701,6 @@ if __name__ == '__main__':
         return None
 
 
-
 def main():
     # Setup basic logging first
     logging.basicConfig(
@@ -899,7 +771,3 @@ def main():
     
     except Exception as e:
         logging.error(f"Application error: {e}")
-        sys.exit(1)
-
-if __name__ == '__main__':
-    main()
