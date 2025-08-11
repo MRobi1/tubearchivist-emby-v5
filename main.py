@@ -13,20 +13,123 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-import schedule
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 
-# urllib3 compatibility imports
-import urllib3
-from urllib3.util.retry import Retry
-from requests.adapters import HTTPAdapter
-import requests
-
-# Load environment variables
+# Load environment variables first
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+# Core imports
+import requests
+
+# urllib3 compatibility imports
+try:
+    import urllib3
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
+except ImportError as e:
+    logging.error(f"Failed to import required packages: {e}")
+    sys.exit(1)
+
+# Optional imports
+try:
+    import schedule
+    HAS_SCHEDULE = True
+except ImportError:
+    HAS_SCHEDULE = False
+    logging.warning("Schedule not available - server mode disabled")
+
+try:
+    from dateutil.parser import parse as date_parse
+    HAS_DATEUTIL = True
+except ImportError:
+    HAS_DATEUTIL = False
+    logging.warning("python-dateutil not available - date parsing limited")
+
+# Webhook Server for TubeArchivist notifications
+class WebhookHandler(BaseHTTPRequestHandler):
+    def __init__(self, integration_instance, *args, **kwargs):
+        self.integration = integration_instance
+        super().__init__(*args, **kwargs)
+    
+    def do_POST(self):
+        """Handle POST requests from TubeArchivist"""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                post_data = self.rfile.read(content_length)
+                try:
+                    data = json.loads(post_data.decode('utf-8'))
+                    logging.info(f"Received webhook notification: {data}")
+                except json.JSONDecodeError:
+                    logging.info("Received webhook notification (non-JSON)")
+            
+            # Trigger sync regardless of payload
+            logging.info("Webhook triggered - starting sync...")
+            success = self.integration.sync_metadata()
+            
+            # Send response
+            if success:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+            else:
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error"}).encode())
+                
+        except Exception as e:
+            logging.error(f"Webhook error: {e}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+    
+    def do_GET(self):
+        """Handle GET requests (health check)"""
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        response = {
+            "status": "running",
+            "service": "tubearchivist-emby-integration",
+            "version": "5.0"
+        }
+        self.wfile.write(json.dumps(response).encode())
+    
+    def log_message(self, format, *args):
+        """Override to use our logger"""
+        logging.info(f"Webhook: {format % args}")
+
+class WebhookServer:
+    def __init__(self, integration_instance, port=8001):
+        self.integration = integration_instance
+        self.port = port
+        self.server = None
+        self.server_thread = None
+    
+    def start(self):
+        """Start the webhook server in a separate thread"""
+        def handler(*args, **kwargs):
+            return WebhookHandler(self.integration, *args, **kwargs)
+        
+        self.server = HTTPServer(('0.0.0.0', self.port), handler)
+        self.server_thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.server_thread.start()
+        logging.info(f"Webhook server started on port {self.port}")
+    
+    def stop(self):
+        """Stop the webhook server"""
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+            logging.info("Webhook server stopped")
 
 # urllib3 Compatibility Fix
 class CompatibleHTTPAdapter(HTTPAdapter):
@@ -502,26 +605,32 @@ class TubeArchivistEmbyIntegration:
             return None
         
         try:
-            # Handle various date formats
-            from dateutil.parser import parse
-            date_obj = parse(date_string)
-            return date_obj.year
-        except Exception:
-            return None
+            if HAS_DATEUTIL:
+                # Use dateutil if available
+                date_obj = date_parse(date_string)
+                return date_obj.year
+            else:
+                # Fallback to basic parsing
+                # Try to extract year from common formats like "2023-01-15T10:30:00Z"
+                import re
+                year_match = re.search(r'(\d{4})', date_string)
+                if year_match:
+                    return int(year_match.group(1))
+        except Exception as e:
+            logging.debug(f"Failed to parse date '{date_string}': {e}")
+        
+        return None
 
-def setup_logging(level: str = 'INFO'):
-    """Setup logging configuration"""
-    numeric_level = getattr(logging, level.upper(), logging.INFO)
-    
-    logging.basicConfig(
-        level=numeric_level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-        ]
-    )
+
 
 def main():
+    # Setup basic logging first
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    
     parser = argparse.ArgumentParser(description='TubeArchivist Emby Integration v5.0')
     parser.add_argument('--server', action='store_true', help='Run as server for notifications')
     parser.add_argument('--sync', action='store_true', help='Perform one-time sync')
@@ -531,7 +640,11 @@ def main():
     try:
         # Load configuration
         config = Config()
-        setup_logging(config.get('log_level', 'INFO'))
+        
+        # Update logging level from config
+        log_level = config.get('log_level', 'INFO').upper()
+        logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
+        
         logging.info("Configuration loaded successfully")
         
         # Create integration instance
@@ -544,14 +657,34 @@ def main():
         
         elif args.server:
             # Run as server
+            if not HAS_SCHEDULE:
+                logging.error("Schedule package not available - cannot run in server mode")
+                sys.exit(1)
+                
             logging.info("Starting server mode...")
-            # Here you would implement your notification server
-            # For now, we'll run scheduled sync
+            
+            # Start webhook server
+            webhook_port = int(config.get('listen_port', 8001))
+            webhook_server = WebhookServer(integration, webhook_port)
+            webhook_server.start()
+            
+            # Schedule periodic sync
             schedule.every(config.get('sync_interval_hours', 24)).hours.do(integration.sync_metadata)
             
-            while True:
-                schedule.run_pending()
-                time.sleep(60)
+            logging.info(f"Server started - webhook listening on port {webhook_port}")
+            logging.info(f"Scheduled sync every {config.get('sync_interval_hours', 24)} hours")
+            
+            try:
+                while True:
+                    schedule.run_pending()
+                    time.sleep(60)
+            except KeyboardInterrupt:
+                logging.info("Received shutdown signal")
+                webhook_server.stop()
+            except Exception as e:
+                logging.error(f"Server error: {e}")
+                webhook_server.stop()
+                raise
         
         else:
             # Default: one-time sync
