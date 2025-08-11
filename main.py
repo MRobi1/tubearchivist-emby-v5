@@ -325,28 +325,23 @@ class TubeArchivistClient:
             logging.info(f"Retrieved {len(videos)} videos from page {page}")
             
             # Check pagination info from TubeArchivist v5.0 API
-            # The API might return pagination info differently
-            total_count = data.get('paginate', {}).get('total_hits', 0)
-            current_count = len(all_videos)
+            paginate_info = data.get('paginate', {})
+            total_hits = paginate_info.get('total_hits', 0)
+            last_page = paginate_info.get('last_page', 1)
+            current_page = paginate_info.get('current_page', page)
             
-            if total_count > 0:
-                logging.info(f"Progress: {current_count}/{total_count} videos")
+            logging.info(f"Progress: {len(all_videos)}/{total_hits} videos (page {current_page}/{last_page})")
             
-            # Stop if we got fewer videos than requested (last page)
-            if len(videos) < 100:
-                logging.info(f"Retrieved {len(videos)} videos (less than 100), assuming last page")
-                break
-                
-            # Also check if we have total count and reached it
-            if total_count > 0 and current_count >= total_count:
-                logging.info(f"Retrieved all {total_count} videos")
+            # Check if we've reached the last page
+            if current_page >= last_page:
+                logging.info(f"Reached last page ({last_page})")
                 break
                 
             page += 1
             
             # Safety break to prevent infinite loops
-            if page > 50:  # Reasonable limit
-                logging.warning(f"Reached maximum page limit (50), stopping")
+            if page > 100:  # Much higher limit now that we know there can be 13+ pages
+                logging.warning(f"Reached maximum page limit (100), stopping")
                 break
         
         logging.info(f"Total videos retrieved: {len(all_videos)}")
