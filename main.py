@@ -292,7 +292,14 @@ class TubeArchivistClient:
             params = {'page': page, 'limit': limit}
             response = self.session.get(f"{self.base_url}/api/video/", params=params, timeout=30)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            
+            # Debug: log the full response structure
+            logging.debug(f"TubeArchivist API response keys: {list(data.keys())}")
+            if 'paginate' in data:
+                logging.debug(f"Pagination info: {data['paginate']}")
+            
+            return data
         except Exception as e:
             logging.error(f"Failed to get videos from TubeArchivist: {e}")
             return {}
@@ -417,12 +424,23 @@ class EmbyClient:
                     'api_key': self.api_key,
                     'ParentId': library_id,
                     'Recursive': 'true',
-                    'IncludeItemTypes': 'Episode'
+                    'IncludeItemTypes': 'Episode,Movie,Video'  # Try multiple types
                 },
                 timeout=30
             )
             response.raise_for_status()
-            return response.json().get('Items', [])
+            data = response.json()
+            
+            # Debug: log response structure
+            logging.debug(f"Emby library response keys: {list(data.keys())}")
+            items = data.get('Items', [])
+            logging.debug(f"Found {len(items)} items in library")
+            
+            # Debug: show sample items
+            for i, item in enumerate(items[:3]):  # First 3 items
+                logging.debug(f"Item {i+1} sample: Name='{item.get('Name')}', Type='{item.get('Type')}', Path='{item.get('Path', '')[:50]}...'")
+            
+            return items
         except Exception as e:
             logging.error(f"Failed to get library items: {e}")
             return []
@@ -435,7 +453,7 @@ class EmbyClient:
                 params={
                     'api_key': self.api_key,
                     'Recursive': 'true',
-                    'IncludeItemTypes': 'Episode',
+                    'IncludeItemTypes': 'Episode,Movie,Video',
                     'SearchTerm': ''
                 },
                 timeout=30
