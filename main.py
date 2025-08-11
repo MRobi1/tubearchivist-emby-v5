@@ -304,19 +304,43 @@ class TubeArchivistClient:
         
         while True:
             data = self.get_videos(page=page, limit=100)
+            
+            # Debug: log the response structure
+            logging.debug(f"Page {page} response keys: {list(data.keys())}")
+            
             videos = data.get('data', [])
             
             if not videos:
+                logging.info(f"No videos found on page {page}, stopping pagination")
                 break
                 
             all_videos.extend(videos)
             logging.info(f"Retrieved {len(videos)} videos from page {page}")
             
-            # Check if there are more pages
+            # Check pagination info from TubeArchivist v5.0 API
+            # The API might return pagination info differently
+            total_count = data.get('paginate', {}).get('total_hits', 0)
+            current_count = len(all_videos)
+            
+            if total_count > 0:
+                logging.info(f"Progress: {current_count}/{total_count} videos")
+            
+            # Stop if we got fewer videos than requested (last page)
             if len(videos) < 100:
+                logging.info(f"Retrieved {len(videos)} videos (less than 100), assuming last page")
+                break
+                
+            # Also check if we have total count and reached it
+            if total_count > 0 and current_count >= total_count:
+                logging.info(f"Retrieved all {total_count} videos")
                 break
                 
             page += 1
+            
+            # Safety break to prevent infinite loops
+            if page > 50:  # Reasonable limit
+                logging.warning(f"Reached maximum page limit (50), stopping")
+                break
         
         logging.info(f"Total videos retrieved: {len(all_videos)}")
         return all_videos
@@ -514,17 +538,41 @@ class TubeArchivistEmbyIntegration:
         
         # Get all items from Emby library
         emby_items = self.emby_client.get_library_items()
+        logging.info(f"Found {len(emby_items)} total items in Emby library")
+        
         if not emby_items:
-            logging.warning("No items found in Emby library")
+            logging.warning("No items found in Emby library - make sure:")
+            logging.warning("1. Library exists and is named correctly")
+            logging.warning("2. Library has been scanned")
+            logging.warning("3. Video files are properly mounted")
             return False
         
         # Create mapping of YouTube IDs to Emby items
         emby_by_youtube_id = {}
+        emby_items_debug = []
+        
         for item in emby_items:
+            # Debug: collect info about each item
+            item_info = {
+                'Name': item.get('Name', 'Unknown'),
+                'Path': item.get('Path', 'No path'),
+                'Type': item.get('Type', 'Unknown'),
+                'ProviderIds': item.get('ProviderIds', {})
+            }
+            emby_items_debug.append(item_info)
+            
             # Look for YouTube ID in various places
             youtube_id = self._extract_youtube_id(item)
             if youtube_id:
                 emby_by_youtube_id[youtube_id] = item
+        
+        # Debug logging
+        logging.info(f"Sample of Emby items found:")
+        for i, item_info in enumerate(emby_items_debug[:5]):  # Show first 5
+            logging.info(f"  Item {i+1}: {item_info['Name']} | Path: {item_info['Path'][:50]}...")
+        
+        if len(emby_items_debug) > 5:
+            logging.info(f"  ... and {len(emby_items_debug) - 5} more items")
         
         logging.info(f"Found {len(emby_by_youtube_id)} Emby items with YouTube IDs")
         
@@ -558,16 +606,26 @@ class TubeArchivistEmbyIntegration:
         provider_ids = emby_item.get('ProviderIds', {})
         if 'YouTube' in provider_ids:
             youtube_id = provider_ids['YouTube']
+            logging.debug(f"Found YouTube ID in ProviderIds: {youtube_id}")
+            return youtube_id
         
         # Check filename
-        if not youtube_id:
-            path = emby_item.get('Path', '')
-            filename = Path(path).stem if path else ''
+        path = emby_item.get('Path', '')
+        if path:
+            filename = Path(path).stem
             # Extract 11-character YouTube ID from filename
             import re
-            match = re.search(r'[a-zA-Z0-9_-]{11}', filename)
-            if match:
-                youtube_id = match.group(0)
+            # Look for YouTube ID pattern: 11 chars of letters, numbers, hyphens, underscores
+            matches = re.findall(r'[a-zA-Z0-9_-]{11}', filename)
+            for match in matches:
+                # Additional validation: YouTube IDs don't start/end with hyphens
+                if not match.startswith('-') and not match.endswith('-'):
+                    youtube_id = match
+                    logging.debug(f"Extracted YouTube ID from filename '{filename}': {youtube_id}")
+                    return youtube_id
+        
+        # Debug: log when no ID found
+        logging.debug(f"No YouTube ID found for item: {emby_item.get('Name', 'Unknown')} | Path: {path}")
         
         return youtube_id
     
