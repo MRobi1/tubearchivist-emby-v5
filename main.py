@@ -771,3 +771,7 @@ def main():
     
     except Exception as e:
         logging.error(f"Application error: {e}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
