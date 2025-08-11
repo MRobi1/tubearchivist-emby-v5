@@ -626,7 +626,7 @@ class TubeArchivistEmbyIntegration:
         if item_name and len(item_name) == 11:
             # YouTube IDs are 11 characters: letters, numbers, hyphens, underscores
             import re
-            if re.match(r'^[a-zA-Z0-9_-]{11}
+            if re.match(r'^[a-zA-Z0-9_-]{11}$', item_name):
     
     def _update_emby_item_metadata(self, emby_item: Dict[str, Any], ta_video: Dict[str, Any]) -> bool:
         """Update a single Emby item with TubeArchivist metadata"""
